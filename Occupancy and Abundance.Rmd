@@ -1,0 +1,28 @@
+---
+title: "Modeling Occupancy and Abundance"
+output:
+  html_document:
+    fig_caption: true
+    theme: "journal"
+    toc: true
+    toc_float:
+      smooth_scroll: true
+---
+prepared by: *Michael T. Hallworth*    
+*Smithsonian Conservation Biology Institute : Migratory Bird Center*
+
+Point count data are a cost effective way of surveying large areas to answer ecological questions. For example, point count data can answer the questions:     
+
+*  How many species are present in a given area?    
+*  How many individuals of each species are there?  
+* How has the community changed over time?  
+* Which habitats is X species associated with?  
+
+These are just a few of the possible questions that can be answered using point count data. However, the question of interest determines how the data should be analyzed. If the question deals with *how many species are present here?* then using occupancy modeling would be a good fit. If the question is something like *How has the population size of Ovenbirds changed over time?*, then modeling abundance is more appropriate.
+
+Regardless of the question - accounting for imperfect detection is important. Failing to account for imperfect detection biases estimates of either species richness or abundance low - unless all species and/or individuals are detected perfectly. This is unlikely given that the study organisms are animals and move, may have been siting on a nest during your visit, preening instead of singing, etc.  
+
+The subsequent code illustrates how to use point count data to answer ecological questions while accounting for imperfect detection. In this tutorial we will use simulated data using 373 survey locations within Hubbard Brook Experimental Forest, NH that were visited three times during the 2015 breeding season. Three, 10 minute point count surveys were conducted along 15 transects spaced 500m apart. Each survey location was seperated by either 100m, or 200m. All species seen or heard within 50m and 100m of the point during the 10 min count were recorded.
+
+**NOTE:** The code was written for analysis using BUGS language (JAGS, winBUGS, openBUGS, etc.)
+
