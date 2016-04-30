@@ -1,1 +1,1 @@
-# OccAbun_Buler
+This repository have script to execute occupancy and abundance models in BUGS language for a guest lecture in Jeff Buler's Ecological Modeling course taught during spring 2016 at University of Delaware. 
