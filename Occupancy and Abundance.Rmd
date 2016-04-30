@@ -5,12 +5,12 @@ output:
     fig_caption: true
     theme: "journal"
     toc: true
-    toc_float:
-      smooth_scroll: true
 ---
 prepared by: *Michael T. Hallworth*    
 *Smithsonian Conservation Biology Institute : Migratory Bird Center*
 
+Introduction
+-------------
 Point count data are a cost effective way of surveying large areas to answer ecological questions. For example, point count data can answer the questions:     
 
 *  How many species are present in a given area?    
@@ -26,3 +26,698 @@ The subsequent code illustrates how to use point count data to answer ecological
 
 **NOTE:** The code was written for analysis using BUGS language (JAGS, winBUGS, openBUGS, etc.)
 
+The MCMC sampler used in this example is [JAGS](https://sourceforge.net/projects/mcmc-jags/files/). 
+
+Install JAGS & packages
+-------------
+If you're interested in conducting Occupancy modeling or estimating Abundance in JAGS, install JAGS then run the following code to get the packages needed for the tutorial. JAGS (Just Another Gibbs Sampler) can be downloaded [here](https://sourceforge.net/projects/mcmc-jags/files/). 
+
+```{r eval = FALSE}
+# Check to make sure the required packages are installed on your machine
+# If not, they will be installed
+
+reqPackages <- c("RCurl","rjags","jagsUI","raster","sp","maptools","rgeos","MASS")
+get.packages <- reqPackages[!(reqPackages %in% installed.packages()[,"Package"])]
+if(length(get.packages)>0) install.packages(get.packages,dependencies = TRUE)
+```
+
+```{r message=FALSE,error=FALSE,warning=FALSE}
+library(raster)
+library(RCurl)
+library(jagsUI)
+```
+Occupancy
+----------
+Occupancy modeling is done using hierarchical models. You can think of occupancy as two processes. The observation model and the process model or ecological model. Often times we are interested in the ecological or process model but it really depends on the question of interest. The true occupancy state of a plot or location is a latent variable - can't be observed directly in the presence of imperfect detection. To estimate the occupancy state ($Z$) we use a combination of the observation model and ecological or process model.
+
+*Observation model* 
+
+
+$$ y_{ij} \mid Z_i \sim Bernoulli(Z_i*\rho) $$
+
+where $y$ is the observation of detection/non-detection (1/0) at site $i$ and replcate $j$ given the true occupancy state ($Z$) at site $i$. $\rho$ is the probability of detecting the species given that it is present. We can model changes in detection probability ($\rho$) as a function of covariates ($x$) using a linear model with a logit link function. 
+
+$$ logit(\rho) = \alpha + \beta*x$$
+
+*Process model* 
+
+$$ Zi \sim Bernoulli(\psi_i) $$
+$$ logit(\psi_i) = \alpha + \beta*x_i$$
+
+We can include variables of interest in both the Observation and Process / Ecological model. For example, when conducting avian point counts the time of day, or date of the survey may be an important variables in the Observation model but may not contribute to true occupancy state of a site. The reverse is also true, elevation may be an important variable in whether Ovenbirds occupy a site but may have little or no influence on your ability to detect them. Having both an Observation and process/ecological model allows one to disentangle these factors. 
+
+### Writing out the model
+
+Let's write out a simple occupancy model using algebra before we write the model in BUGS language. For this example we will use simulated point count data from Hubbard Brook Experimental Forest, NH. We conducted point counts at 373 locations throughout HBEF during the 2015 breeding season. We used a robust-design where each location was surveyed at least 3 times during the breeding season (a time in which the occupancy state does not change). During 2015 we conducted 10-min point counts at each surveyed each location 4 times throughout the season. We recorded the Date (`Date`), time (`Time`) the survey started and who conducted the survey (`Obs`). We are ultimately interested in what factors influence Ovebird occupancy throughout the HBEF. At each site, we recorded elevation (`Elev`), slope (`Slope`) and Aspect (`Aspect`) because we thought these variables may be important in determining whether Ovenbirds are present or not.
+
+***
+> ### Exercise:
+> Take a minute or two and think about how you would write out a model using the covariates described above. Be sure to include the distribution of any parameters included in the model, $\beta$ for example. 
+
+***
+
+Let's write out a model with all the covariates. Here we will allow detection ($\rho$) to vary by survey location $i$ by incorporating variables we think are important for detection and change by survey replicate $j$. 
+    
+**Observation Model**
+    
+$$ y_{ij} \mid Z_i \sim Bernoulli(Z_i*\rho_i) $$
+
+$$ logit(\rho_i) = \alpha + \beta_1*Date_{ij}+\beta_2*Time_{ij}+\beta_3*Obs_{ij}$$
+    
+**Process / Ecological Model**  
+    
+$$ Z_i \sim Bernoulli(\psi_i) $$
+
+$$ logit(\psi_i) = \alpha + \beta_1*Elev_i + \beta_2*Slope_i + \beta_3*Aspect_i$$ 
+    
+**Distribution of parameters in model**    
+    
+$$\beta \sim Normal(\mu,variance)$$
+$$\alpha \sim Normal(\mu, variance)$$
+
+
+Getting the data
+-------------
+```{r, warning=FALSE,error=FALSE,message=FALSE}
+
+# Define the location of the data on GitHub
+data_url <- "https://raw.githubusercontent.com/MTHallworth/OccAbun_Buler/master/data/OVEN.csv"
+
+SiteCovs_url <- "https://raw.githubusercontent.com/MTHallworth/OccAbun_Buler/master/data/SiteCovariates.csv"
+Date_url <- "https://raw.githubusercontent.com/MTHallworth/OccAbun_Buler/master/data/Date.csv"
+Time_url <- "https://raw.githubusercontent.com/MTHallworth/OccAbun_Buler/master/data/Time.csv"
+Observer_url <- "https://raw.githubusercontent.com/MTHallworth/OccAbun_Buler/master/data/Obs.csv"
+
+# Get the data connection using RCurl 
+data.url <- getURL(data_url)                
+covs.url <- getURL(SiteCovs_url)
+date.url <- getURL(Date_url)
+time.url <- getURL(Time_url)
+obs.url <- getURL(Observer_url)
+
+# Read in the data 
+OVEN <- read.csv(textConnection(data.url))
+SiteCovs <- read.csv(textConnection(covs.url))
+Date <- read.csv(textConnection(date.url))
+Time <- read.csv(textConnection(time.url))
+Obs <- read.csv(textConnection(obs.url))
+
+Time[is.na(Time)]<-0
+Date[is.na(Date)]<-0
+Obs[is.na(Obs)]<-0
+
+# Rename the first column in SiteCovs from X to Plot
+names(SiteCovs)[1]<-"Plot"
+names(Date) <- c("Rep.1","Rep.2","Rep.3","Rep.4")
+names(Time) <- c("Rep.1","Rep.2","Rep.3","Rep.4")
+names(Obs) <- c("Rep.1","Rep.2","Rep.3","Rep.4")
+
+# Inspect first 5 rows
+head(OVEN)
+```
+ 
+The number of individuals were counted within the 10min point count. Here we convert the number of individuals to presence / absence. 
+
+```{r}
+OVENocc<-OVEN
+OVENocc[OVENocc>1]<-1
+
+head(OVENocc)
+```
+
+Specifying the model in BUGS language
+---------------
+```{r}
+###################################################################################
+#
+# Specify model in BUGS language
+#
+###################################################################################
+
+cat("
+model {
+###################################################################################
+#
+#             Priors
+#
+################################################################################### 
+# Hyperpriors
+mu.lpsi ~ dnorm(0,0.01)        # Intercept psi
+sd.lpsi ~ dunif(0,8)           # std priro intercept psi
+tau.lpsi <- pow(sd.lpsi, -2)   # precision intercept psi
+
+mu.beta ~ dnorm(0,0.01)        # Prior for psi beta estimates
+sd.beta ~ dunif(0,5)           # std for psi beta estimates
+tau.beta <- pow(sd.beta, -2)   # precision psi beta estimates
+
+mu.lp ~ dnorm(0,0.01)          # Intercept p
+sd.lp ~ dunif(0,3)             # std prior p
+tau.lp <- pow(sd.lp, -2)       # precision intercept p
+
+mu.betaP ~ dnorm(0,0.01)       # Prior for p beta estimates
+sd.betaP ~ dunif(0,3)          # std for p beta estimates
+tau.betaP <- pow(sd.betaP, -2) # Precision for p beta estimates
+
+# priors 
+   lpsi ~ dnorm(mu.lpsi, tau.lpsi) # Intercept for psi using Hyperparams            
+   lp ~ dnorm(mu.lp, tau.lp)       # Intercept for p using Hyperparams
+
+for(c in 1:ncovs){                      # Occupancy Covs
+   beta[c] ~ dnorm(mu.beta, tau.beta)   # prior for psi beta using hypers
+ } #ncovs
+ 
+for(d in 1:pcovs){                       # Detection Covs
+   betaP[d] ~ dnorm(mu.betaP, tau.betaP) # prior for p beta using hypers
+}  #pcovs
+
+
+##################################################################################
+#
+# Likelihood
+# Ecological model for true occurrence (process model)
+#
+##################################################################################
+
+for (i in 1:plots) { 
+
+      logit(psi[i])<-lpsi +              # intercept psi
+                     beta[1]*Elev[i] +   # beta for Elev
+                     beta[2]*Elev2[i] +  # beta for Elev2
+                     beta[3]*Slope[i] +  # beta for Slope
+                     beta[4]*Aspect[i]   # beta for Aspect
+
+      z[i] ~ dbern(psi[i])               # Occupancy state
+
+} #nplots
+
+##################################################################################
+#
+# Observation model for replicated detection/nondetection observations
+#
+##################################################################################
+
+   for (i in 1:plots){
+      for(j in 1:reps){
+
+         logit(p[i,j]) <-lp +                  # Intercept for detection
+                         betaP[1]*time[i,j] +  # beta for time
+                         betaP[2]*date[i,j] +  # beta for date
+                         betaP[3]*obsvr[i,j]   # beta for observer
+
+         y[i,j] ~ dbern(z[i] * p[i,j])    # True Occupancy state * detection 
+
+      } #nreps
+   }    #nschwarz
+   
+##################################################################################
+#
+# Derived quantities
+#
+##################################################################################
+
+# No derived quantities yet
+
+##################################################################################
+
+} # End Model
+",fill=TRUE,file = "model_files/Occupancy.txt")
+```
+
+Setting reasonable occupancy states as starting values. The model won't run if you don't set appropriate initial values for the occupancy state. If you don't specify initial values for a variable JAGS will select a starting value. However, the initial value that JAGS selects for occupancy state may differ from the true occupancy state - in such cases JAGS reports an error. The error is typically `Invalid parent node`. To avoid that we need to set appropriate initial values. Here we write a function to do just that. We set occupancy to 1 if the species is ever recorded at the plot and 0 otherwise by using the apply function. 
+
+```{r}
+zint<-function(x){
+  b<-apply(x,1,sum)
+  b[b>1]<-1
+  return(b)
+}
+
+```
+
+Here we pass JAGS a list of initial values - we call the list inits. Notice that the function we just made `zint` is executed within the list. This is important if we want to run the code in parallel. 
+
+```{r}
+set.seed(04823)
+inits <- function() list(z = zint(OVENocc),
+                         mu.lpsi=rnorm(1,0,0.1),
+                         sd.lpsi=runif(1,0,8),
+                         mu.beta=rnorm(1,0.1),
+                         sd.beta=runif(1,0,5),
+                         mu.lp=rnorm(1,0,0.1),
+                         sd.lp=runif(1,0,3),
+                         mu.betaP=rnorm(1,0,0.1),
+                         sd.betaP=runif(1,0,3))
+``` 
+
+Set the number of chains we want to run
+```{r}
+nchains<-3
+```
+
+Set up the data to be passed to JAGS. Notice the named list. The names in the list correspond to variables in the model. 
+```{r}
+win.data <- list(y = OVENocc,
+                 ncovs = 4,
+                 pcovs = 3, 
+                 time = Time, 
+                 date = Date,
+                 obsvr = Obs,
+                 plots = 373,
+                 reps = 4,
+                 Elev = SiteCovs$Elevation,
+                 Elev2 = (SiteCovs$Elevation*SiteCovs$Elevation),
+                 Slope = SiteCovs$Slope,
+                 Aspect = SiteCovs$Aspect)
+```
+Tell JAGS which parameters we want to save - be careful here to specify all the variables you want to monitor after the model runs it's impossible to get information about a variable that is not monitored. This becomes extremely important when a model takes days or even weeks to run! Choose these carefully! 
+
+```{r}
+parameters.to.save = c("psi","lpsi","beta","p","lp","betaP")
+```
+
+Next we send the model, data, and initial values to JAGS to run the analysis. Notice the different parameters that JAGS needs to run. 
+```{r message=FALSE}
+a<-Sys.time()
+z <- jags(model.file = "model_files/Occupancy.txt",  # File written in BUGS language
+          data = win.data,              # Data to run the model on
+          inits = inits,                # initial values
+          parameters.to.save = parameters.to.save,   # parameters you want to monitor
+          n.iter = 1000,                # number of iterations to run per chain
+          n.burnin = 500,               # number of iterations to discard
+          n.thin = 10,                  # save every 10th iteration reduces autocorrelation
+          n.chains = 3,                 # number of chains to run
+          n.adapt = 500,                # number of iterations to 'prime' the model
+          parallel = TRUE)              # run in parallel or not
+Sys.time()-a
+```
+
+Results
+--------
+### Inside the output 
+The model results are stored in a named list. The iterations are stored in `sims.list` but `jagsUI` also calculates the `mean`, and credible intervals (q2.5,q97.5).
+```{r eval = FALSE}
+str(z)
+```
+
+### The all important figures 
+
+We can look at how elevation, elevation^2, slope and aspect influence Ovenbird occupancy within Hubbard Brook by looking at the beta estimates but everyone likes a nice figure. Here's how you can make one of those. First we need to do a few things. We need to create a variable where we can predict occupancy using our modeled results. Let's make a vector of elevation values that span the elevation at HBEF.
+
+```{r}
+# give me 1000 values in sequence from minimum elevation to maximum elevation 
+ElevationOcc <- seq(min(SiteCovs$Elevation),max(SiteCovs$Elevation),,1000)
+
+EstOcc<-z$mean$lpsi+ # intercept
+                z$mean$beta[1]*ElevationOcc + #the elevation layer
+                z$mean$beta[2]*(ElevationOcc*ElevationOcc) +  # mean Elev2
+                z$mean$beta[3]*0 +  # mean Slope
+                z$mean$beta[4]*0  # mean Aspect
+
+LCI.Occ<-z$q2.5$lpsi+ # intercept
+                 z$q2.5$beta[1]*ElevationOcc+ #the elevation layer
+                 z$q2.5$beta[2]*(ElevationOcc*ElevationOcc)  +  # mean Elev2
+                 z$q2.5$beta[3]*0 +  # mean Slope
+                 z$q2.5$beta[4]*0   # mean Aspect
+
+UCI.Occ<-z$q97.5$lpsi+ # intercept
+                z$q97.5$beta[1]*ElevationOcc + #the elevation layer
+                z$q97.5$beta[2]*(ElevationOcc*ElevationOcc) +  # mean Elev2
+                z$q97.5$beta[3]*0 +  # mean Slope
+                z$q97.5$beta[4]*0   # mean Aspect
+
+```
+```{r}
+par(bty="l")
+plot(plogis(EstOcc)~ElevationOcc,
+     type="l", # line graph instead of points
+     yaxt="n", # don't print y axis text
+     ylab="Occupancy",
+     xlab="Elevation",
+     ylim=c(0.5,1)) # set yaxis limits
+
+axis(2,las=2) # print readable y axis text
+
+#Plot upper and lower credible intervals
+points(plogis(LCI.Occ)~ElevationOcc,
+       type="l", #plot line not points
+       lty=2, # dotted line
+       col="gray") # gray line
+       
+points(plogis(UCI.Occ)~ElevationOcc,
+       type="l", #plot line not points
+       lty=2, # dotted line
+       col="gray") # gray line
+```
+       
+Predictions on the landscape
+-----------
+      
+We can make predictions on the landscape based on the model results. 
+
+### Grab values for HBEF landscape
+```{r}
+landscape_url<-"https://raw.githubusercontent.com/MTHallworth/OccAbun_Buler/master/data/HBEFgridcovs.csv"
+landscape.url <- getURL(landscape_url)
+
+# Read in the data 
+landscapeValues <- read.csv(textConnection(landscape.url))
+
+head(landscapeValues)
+```
+
+```{r}
+landscapeValues$OvenOcc<-plogis(z$mean$lpsi+ # intercept
+                z$mean$beta[1]*landscapeValues$Elevation+ #the elevation layer
+                z$mean$beta[2]*(landscapeValues$Elevation*landscapeValues$Elevation) +  # mean Elev2
+                z$mean$beta[3]*landscapeValues$Slope +  # mean Slope
+                z$mean$beta[4]*landscapeValues$Aspect)  # mean Aspect
+
+plot(rasterFromXYZ(cbind(landscapeValues$x,landscapeValues$y,landscapeValues$OvenOcc)))
+```
+
+Variable selection
+------------------
+Model selection in a Bayesian framework is a bit controversial and the jury is still out, especially for hierarchical models. One way to determine variable importance is to use variable selection. It's a rather neat trick and relatively simple to add to the model. Here we add a paramater $\gamma$ which takes a 1 if the variable is important and 0 otherwise. The more important a variable is the more times $\gamma$ will flip to 1. I've included the $\gamma$ parameter in the model specification below. Interpreting the $\beta$ estimates can be a little tricky because they go to 0 when $\gamma = 0$ and take the true value when $\gamma = 1$. Let's have a look and implement it into the an occupancy model. 
+
+
+**Observation Model**
+    
+$$ y_{ij} \mid Z_i \sim Bern(Z_i*\rho_i) $$
+
+$$ logit(\rho_i) = \alpha + \gamma_1*\beta_1*Date_{ij}+\gamma_2*\beta_2*Time_{ij}+\gamma_3*\beta_3*Obs_{ij}$$
+    
+**Process / Ecological Model**  
+    
+$$ Z_i \sim Bern(\psi_i) $$
+
+$$ logit(\psi_i) = \alpha + \gamma_1*\beta_1*Elev_i + \gamma_2*\beta_2*Slope_i + \gamma_3*\beta_3*Aspect_i$$ 
+    
+**Distribution of parameters in model**    
+    
+$$\beta \sim Norm(\mu,variance)$$
+$$\alpha \sim Norm(\mu, variance)$$
+$$\gamma \sim Bern(0.5)$$
+
+
+```{r}
+###################################################################################
+#
+# Specify model in BUGS language
+#
+###################################################################################
+
+cat("
+model {
+###################################################################################
+#
+#             Priors
+#
+################################################################################### 
+# Hyperpriors
+mu.lpsi ~ dnorm(0,0.01)        # Intercept psi
+sd.lpsi ~ dunif(0,8)           # std priro intercept psi
+tau.lpsi <- pow(sd.lpsi, -2)   # precision intercept psi
+
+mu.beta ~ dnorm(0,0.01)        # Prior for psi beta estimates
+sd.beta ~ dunif(0,5)           # std for psi beta estimates
+tau.beta <- pow(sd.beta, -2)   # precision psi beta estimates
+
+mu.lp ~ dnorm(0,0.01)          # Intercept p
+sd.lp ~ dunif(0,3)             # std prior p
+tau.lp <- pow(sd.lp, -2)       # precision intercept p
+
+mu.betaP ~ dnorm(0,0.01)       # Prior for p beta estimates
+sd.betaP ~ dunif(0,3)          # std for p beta estimates
+tau.betaP <- pow(sd.betaP, -2) # Precision for p beta estimates
+
+# priors 
+   lpsi ~ dnorm(mu.lpsi, tau.lpsi) # Intercept for psi using Hyperparams            
+   lp ~ dnorm(mu.lp, tau.lp)       # Intercept for p using Hyperparams
+
+for(c in 1:ncovs){                      # Occupancy Covs
+   beta[c] ~ dnorm(mu.beta, tau.beta)   # prior for psi beta using hypers
+   gamma[c] ~ dbern(0.5)                # variable selection
+ } #ncovs
+ 
+for(d in 1:pcovs){                       # Detection Covs
+   betaP[d] ~ dnorm(mu.betaP, tau.betaP) # prior for p beta using hypers
+   gammaP[d] ~ dbern(0.5)                # variable selection
+}  #pcovs
+
+
+##################################################################################
+#
+# Likelihood
+# Ecological model for true occurrence (process model)
+#
+##################################################################################
+
+for (i in 1:plots) { 
+
+      logit(psi[i])<-lpsi +              # intercept psi
+                     gamma[1]*beta[1]*Elev[i] +   # beta for Elev
+                     gamma[2]*beta[2]*Elev2[i] +  # beta for Elev2
+                     gamma[3]*beta[3]*Slope[i] +  # beta for Slope
+                     gamma[4]*beta[4]*Aspect[i]   # beta for Aspect
+
+      z[i] ~ dbern(psi[i])               # Occupancy state
+
+} #nplots
+
+##################################################################################
+#
+# Observation model for replicated detection/nondetection observations
+#
+##################################################################################
+
+   for (i in 1:plots){
+      for(j in 1:reps){
+
+         logit(p[i,j]) <-lp +                  # Intercept for detection
+                         gammaP[1]*betaP[1]*time[i,j] +  # beta for time
+                         gammaP[2]*betaP[2]*date[i,j] +  # beta for date
+                         gammaP[3]*betaP[3]*obsvr[i,j]   # beta for observer
+
+         y[i,j] ~ dbern(z[i] * p[i,j])    # True Occupancy state * detection 
+
+      } #nreps
+   }    #nschwarz
+   
+##################################################################################
+#
+# Derived quantities
+#
+##################################################################################
+
+# No derived quantities yet
+
+##################################################################################
+
+} # End Model
+",fill=TRUE,file = "model_files/Occupancy_VariableSelection.txt")
+```
+
+```{r}
+parameters.to.save = c("psi","lpsi","beta","gamma","p","lp","betaP","gammaP")
+```
+
+Next we send the model, data, and initial values to JAGS to run the analysis. Notice the different parameters that JAGS needs to run. 
+```{r message=FALSE}
+a<-Sys.time()
+z <- jags(model.file = "model_files/Occupancy_VariableSelection.txt",  # File written in BUGS language
+          data = win.data,              # Data to run the model on
+          inits = inits,                # initial values
+          parameters.to.save = parameters.to.save,   # parameters you want to monitor
+          n.iter = 1000,                # number of iterations to run per chain
+          n.burnin = 500,               # number of iterations to discard
+          n.thin = 10,                  # save every 10th iteration reduces autocorrelation
+          n.chains = 3,                 # number of chains to run
+          n.adapt = 500,                # number of iterations to 'prime' the model
+          parallel = TRUE)              # run in parallel or not
+Sys.time()-a
+```
+
+```{r echo=FALSE}
+par(mar=c(4,6,2,2),mfrow=c(1,2))
+plot(c(1:4)~sort(z$mean$gamma),pch=19,ylim=c(0,5),xlim=c(0,1),yaxt="n",ylab="",xlab="Variable Support")
+axis(2,las=2,at=1:4,labels=c("Slope","Aspect","Elevation","Elevation2"))
+
+plot(c(1:3)~sort(z$mean$gammaP),pch=19,ylim=c(0,5),xlim=c(0,1),yaxt="n",ylab="",xlab="Variable Support")
+axis(2,las=2,at=1:3,labels=c("Observer","Date","Time"))
+```
+
+
+### Model Selection
+We can get an idea of how many times the variables were in combination with one another to get at model selection.
+
+```{r echo = FALSE}
+gamma1<-z$sims.list$gamma[,1]
+gamma2<-z$sims.list$gamma[,2]
+gamma3<-z$sims.list$gamma[,3]
+gamma4<-z$sims.list$gamma[,4]
+
+mods<-t(t(table(paste0(gamma1,gamma2,gamma3,gamma4))/length(gamma1)))
+colnames(mods)<-"Model Importance"
+print(mods,dig=3)
+```
+# Abundance 
+
+
+*Observation model* 
+
+$$ y_{ij} \mid N_i \sim Binomial(N_i,\rho) $$
+
+where $y$ is the observation of number of individuals at site $i$ and replcate $j$ given the true abundance ($N$) or population size at site $i$. $\rho$ is the probability of detecting an individual. *Note:* The meaning of detection probability is different here for abundance models. It might seem subtle but it's actually very important that the detection is at the individual and not the species like occupancy models. We can model covariates on detection as well - the same as with the occupancy model above. We can model changes in expected abundance ($\lambda$) as function of covariates ($x$) using a linear model with a log link function.
+
+$$ logit(\rho) = \alpha + \beta*x$$
+
+*Process model* 
+
+$$ N_i \sim Poisson(\lambda_i) $$
+$$ log(\lambda_i) = \alpha + \beta*x_i$$
+
+```{r}
+#########################################################################################
+#########################################################################################
+#
+#         Specify the model in BUGS language
+#
+#########################################################################################
+#########################################################################################
+
+cat("
+model {
+##########################################################################################
+#
+#  Priors
+
+##########################################################################################
+##### Hyperpriors #######
+mu.theta ~ dnorm(0,0.01)
+tau.theta ~ dgamma(0.001,0.001)
+mu.thetaP ~ dnorm(0,0.01)
+tau.thetaP ~ dgamma(0.001,0.001)  
+
+pInt ~ dnorm(0, 0.01)  # intercept for detection
+alpha ~ dnorm(0,0.01)  # intercept for first count
+
+for(i in 1:373){
+Error[i]~dnorm(0,0.01)
+}
+
+# beta estimates
+   for (c in 1:ncovs){ 
+       beta[c]~dnorm(mu.theta,tau.theta)
+       betaG[c]~dnorm(mu.theta,tau.theta)
+      } #ncovs
+
+# detection
+for (m in 1:pcovs){
+      betaP[m]~dnorm(mu.thetaP,tau.thetaP)  
+  } #pcovs
+
+##########################################################################################
+#
+#  Likelihood
+#
+##########################################################################################
+for(i in 1:plots) { # Plot
+     N[i] ~ dpois(lambda[i])
+     lambda[i]<-exp( alpha+                  #intercept
+                       beta[1]*Elev[i]+        #Elevation
+                       beta[2]*Slope[i]+       #Slope
+                       beta[3]*Aspect[i]+      #Aspect
+                       Error[i])               #Random Error term                                                         
+
+   for(j in 1:reps) {                        # Replicates 
+     y[i,j] ~ dbin(p[i,j], N[i]) 
+     p[i,j]<-1/(1+exp(-logit.p[i,j]))
+     logit.p[i,j]<-pInt+                     # Detection intercept
+                  betaP[1]*time[i,j]+        # time of count
+                  betaP[2]*date[i,j]+        # date of count
+                  betaP[3]*obsvr[i,j]        # observer who counted
+     } #reps
+} # plots
+################################################################
+#
+# Derived parameters 
+#
+################################################################
+#
+# Calculate the population size sampled at HBEF
+#
+  Ntot <- sum(N[])
+ P <- mean(p[,])
+
+} # END MODEL
+",fill=TRUE,file="model_files/Abundance.txt")
+```
+
+Function to provide starting values for abundance model in JAGS. It's common place to add 2 or more to the maximum number of birds observed at a site. If the model is run for enough iterations - this value has no impact on the final abundance estimates. 
+
+```{r}
+Nst<-function(x){
+     N<-apply(x,1,max,na.rm=TRUE)+2
+     N[N==-Inf]<-NA
+     N[is.na(N)]<-2
+     return(N)
+}
+```
+
+
+```{r}
+win.data<-list(y = OVEN,
+               Elev = SiteCovs$Elevation,
+               Slope = SiteCovs$Slope,
+               Aspect = SiteCovs$Aspect,
+               date = Date,
+               time = Time,
+               obsvr = Obs,
+               reps = 4,
+               plots = 373,
+               ncovs = 3,
+               pcovs =3)
+```
+
+```{r}
+inits<-function() list(mu.theta=0,          
+                       tau.theta=10,
+                       mu.thetaP=0,
+                       tau.thetaP=10,
+                       N=Nst(OVEN))
+```
+
+Specify which parameters you want to monitor 
+
+```{r}
+params<-c("N","Ntot","alpha","beta","betaP","Error","P")
+```
+
+Run the abundance model 
+```{r}
+a<-Sys.time()
+abundFit<-jags(model = "model_files/Abundance.txt", 
+               data = win.data,
+               inits = inits,
+               parameters.to.save = params,
+               n.iter=1000,
+             	 n.burnin=500,
+               n.thin=25,
+               n.chains=3,
+               n.adapt = 50,
+               parallel = TRUE)
+Sys.time()-a
+```
+
+```{r echo=FALSE}
+point.area<-pi*50*50/10000
+res<-50*50/10000
+
+landscapeValues$lambda<-exp(abundFit$mean$alpha+                  #intercept
+               abundFit$mean$beta[1]*landscapeValues$Elevation+        #Elevation
+               abundFit$mean$beta[2]*landscapeValues$Slope+       #Slope
+               abundFit$mean$beta[3]*landscapeValues$Aspect)*     #Aspect
+               (res/point.area)
+
+plot(rasterFromXYZ(cbind(landscapeValues$x,landscapeValues$y,landscapeValues$lambda)))
+```

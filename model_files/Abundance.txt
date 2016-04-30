@@ -1,0 +1,66 @@
+
+model {
+##########################################################################################
+#
+#  Priors
+
+##########################################################################################
+##### Hyperpriors #######
+mu.theta ~ dnorm(0,0.01)
+tau.theta ~ dgamma(0.001,0.001)
+mu.thetaP ~ dnorm(0,0.01)
+tau.thetaP ~ dgamma(0.001,0.001)  
+
+pInt ~ dnorm(0, 0.01)  # intercept for detection
+alpha ~ dnorm(0,0.01)  # intercept for first count
+
+for(i in 1:373){
+Error[i]~dnorm(0,0.01)
+}
+
+# beta estimates
+   for (c in 1:ncovs){ 
+       beta[c]~dnorm(mu.theta,tau.theta)
+       betaG[c]~dnorm(mu.theta,tau.theta)
+      } #ncovs
+
+# detection
+for (m in 1:pcovs){
+      betaP[m]~dnorm(mu.thetaP,tau.thetaP)  
+  } #pcovs
+
+##########################################################################################
+#
+#  Likelihood
+#
+##########################################################################################
+for(i in 1:plots) { # Plot
+     N[i] ~ dpois(lambda[i])
+     lambda[i]<-exp( alpha+                  #intercept
+                       beta[1]*Elev[i]+        #Elevation
+                       beta[2]*Slope[i]+       #Slope
+                       beta[3]*Aspect[i]+      #Aspect
+                       Error[i])               #Random Error term                                                         
+
+   for(j in 1:reps) {                        # Replicates 
+     y[i,j] ~ dbin(p[i,j], N[i]) 
+     p[i,j]<-1/(1+exp(-logit.p[i,j]))
+     logit.p[i,j]<-pInt+                     # Detection intercept
+                  betaP[1]*time[i,j]+        # time of count
+                  betaP[2]*date[i,j]+        # date of count
+                  betaP[3]*obsvr[i,j]        # observer who counted
+     } #reps
+} # plots
+################################################################
+#
+# Derived parameters 
+#
+################################################################
+#
+# Calculate the population size sampled at HBEF
+#
+  Ntot <- sum(N[])
+ P <- mean(p[,])
+
+} # END MODEL
+

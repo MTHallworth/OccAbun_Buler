@@ -28,10 +28,12 @@ tau.betaP <- pow(sd.betaP, -2) # Precision for p beta estimates
 
 for(c in 1:ncovs){                      # Occupancy Covs
    beta[c] ~ dnorm(mu.beta, tau.beta)   # prior for psi beta using hypers
+   gamma[c] ~ dbern(0.5)                # variable selection
  } #ncovs
  
 for(d in 1:pcovs){                       # Detection Covs
    betaP[d] ~ dnorm(mu.betaP, tau.betaP) # prior for p beta using hypers
+   gammaP[d] ~ dbern(0.5)                # variable selection
 }  #pcovs
 
 
@@ -45,10 +47,10 @@ for(d in 1:pcovs){                       # Detection Covs
 for (i in 1:plots) { 
 
       logit(psi[i])<-lpsi +              # intercept psi
-                     beta[1]*Elev[i] +   # beta for Elev
-                     beta[2]*Elev2[i] +  # beta for Elev2
-                     beta[3]*Slope[i] +  # beta for Slope
-                     beta[4]*Aspect[i]   # beta for Aspect
+                     gamma[1]*beta[1]*Elev[i] +   # beta for Elev
+                     gamma[2]*beta[2]*Elev2[i] +  # beta for Elev2
+                     gamma[3]*beta[3]*Slope[i] +  # beta for Slope
+                     gamma[4]*beta[4]*Aspect[i]   # beta for Aspect
 
       z[i] ~ dbern(psi[i])               # Occupancy state
 
@@ -64,9 +66,9 @@ for (i in 1:plots) {
       for(j in 1:reps){
 
          logit(p[i,j]) <-lp +                  # Intercept for detection
-                         betaP[1]*time[i,j] +  # beta for time
-                         betaP[2]*date[i,j] +  # beta for date
-                         betaP[3]*obsvr[i,j]   # beta for observer
+                         gammaP[1]*betaP[1]*time[i,j] +  # beta for time
+                         gammaP[2]*betaP[2]*date[i,j] +  # beta for date
+                         gammaP[3]*betaP[3]*obsvr[i,j]   # beta for observer
 
          y[i,j] ~ dbern(z[i] * p[i,j])    # True Occupancy state * detection 
 
