@@ -46,6 +46,9 @@ library(raster)
 library(RCurl)
 library(jagsUI)
 ```
+
+<img align="right" src="http://www.audubon.org/sites/default/files/styles/nas_bird_teaser_illustration/public/4684_Sibl_9780307957900_art_r1.jpg" height="300px" width = "300px" style="filter:FlipH"/>    
+
 Occupancy
 ----------
 Occupancy modeling is done using hierarchical models. You can think of occupancy as two processes. The observation model and the process model or ecological model. Often times we are interested in the ecological or process model but it really depends on the question of interest. The true occupancy state of a plot or location is a latent variable - can't be observed directly in the presence of imperfect detection. To estimate the occupancy state ($Z$) we use a combination of the observation model and ecological or process model.
@@ -560,6 +563,9 @@ mods<-t(t(table(paste0(gamma1,gamma2,gamma3,gamma4))/length(gamma1)))
 colnames(mods)<-"Model Importance"
 print(mods,dig=3)
 ```
+
+<img align="center" src="http://www.audubon.org/sites/default/files/styles/nas_bird_teaser_illustration/public/4684_Sibl_9780307957900_art_r1.jpg" height="300px" width = "300px"/>    
+
 # Abundance 
 
 
@@ -702,12 +708,21 @@ abundFit<-jags(model = "model_files/Abundance.txt",
                parameters.to.save = params,
                n.iter=1000,
              	 n.burnin=500,
-               n.thin=25,
+               n.thin=1,
                n.chains=3,
                n.adapt = 50,
                parallel = TRUE)
 Sys.time()-a
 ```
+
+```{r,echo=FALSE}
+hist(abundFit$sims.list$Ntot,breaks=20,col="gray",border="gray",yaxt="n",ylab="Frequency",xlab="Population size")
+axis(2,las=2)
+abline(v=abundFit$mean$Ntot,col="red",lwd=2)
+abline(v=abundFit$q2.5$Ntot,col="red",lwd = 1,lty=2)
+abline(v=abundFit$q97.5$Ntot,col="red",lwd=1,lty=2)
+```
+
 
 ```{r echo=FALSE}
 point.area<-pi*50*50/10000
@@ -720,4 +735,6 @@ landscapeValues$lambda<-exp(abundFit$mean$alpha+                  #intercept
                (res/point.area)
 
 plot(rasterFromXYZ(cbind(landscapeValues$x,landscapeValues$y,landscapeValues$lambda)))
-```
+```  
+
+<img align = "center" src="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/Git-logo.svg/512px-Git-logo.svg.png" height="150px" width = "150px"/>
